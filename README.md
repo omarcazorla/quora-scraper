@@ -36,7 +36,7 @@ This enhanced version of the Quora scraper focuses on efficiently extracting com
 1. Clone this repository:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/quora-scraper.git
+git clone https://github.com/omarcazorla/quora-scraper.git
 cd quora-scraper
 ```
 
