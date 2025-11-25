@@ -1,5 +1,4 @@
 # __main__.py
-DEBUG = 1
 import os
 import sys
 import time
@@ -7,6 +6,7 @@ import json
 import pathlib
 from pathlib import Path
 import random
+import logging
 import userpaths
 import dateparser
 import argparse
@@ -14,33 +14,44 @@ from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
+from selenium.common.exceptions import NoSuchElementException, TimeoutException, WebDriverException
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 # -------------------------------------------------------------
 # -------------------------------------------------------------
 def connect_chrome():
+    """Initialize Chrome WebDriver with optimized settings."""
     options = Options()
-    options.add_argument('--headless')
-    options.add_argument('log-level=3')
+    options.add_argument('--headless=new')  # Updated headless mode
+    options.add_argument('--log-level=3')
     options.add_argument("--incognito")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    # try:
-    # 	import quora_scraper
-    # 	package_path=str(quora_scraper.__path__).split("'")[1]
-    # 	driver_path= Path(package_path) / "chromedriver"
-    # except:
-    # 	driver_path= Path.cwd() / "chromedriver"
-    # driver_path= Path.cwd() / "chromedriver"
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
 
-    driver = webdriver.Chrome(options=options)
-    driver.maximize_window()
-    time.sleep(2)
-    return driver
+    try:
+        driver = webdriver.Chrome(options=options)
+        driver.maximize_window()
+        logger.info("Chrome WebDriver initialized successfully")
+        time.sleep(2)
+        return driver
+    except WebDriverException as e:
+        logger.error(f"Failed to initialize Chrome WebDriver: {e}")
+        raise
 
 
 # -------------------------------------------------------------
@@ -81,31 +92,30 @@ def scroll_up(self, nb_times):
 
 # -------------------------------------------------------------
 # -------------------------------------------------------------
-# method for loading  quora dynamic content
-def scroll_down(self, type_of_page='users'):
-    last_height = self.page_source
+def scroll_down(driver, type_of_page='users'):
+    """Scroll down page to load dynamic content."""
+    last_height = driver.page_source
     loop_scroll = True
     attempt = 0
-    # we generate a random waiting time between 2 and 4
     waiting_scroll_time = round(random.uniform(2, 4), 1)
-    print('scrolling down to get all answers...')
+    logger.info('Scrolling down to load all content...')
     max_waiting_time = round(random.uniform(5, 7), 1)
-    # we increase waiting time when we look for questions urls
-    if type_of_page == 'questions': max_waiting_time = round(random.uniform(20, 30), 1)
-    # scroll down loop until page not changing
+
+    if type_of_page == 'questions':
+        max_waiting_time = round(random.uniform(20, 30), 1)
+
     while loop_scroll:
-        self.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         time.sleep(2)
         if type_of_page == 'answers':
-            scroll_up(self, 2)
-        new_height = self.page_source
+            scroll_up(driver, 2)
+        new_height = driver.page_source
         if new_height == last_height:
-            # in case of not change, we increase the waiting time
             waiting_scroll_time = max_waiting_time
             attempt += 1
-            if attempt == 3:  # in the third attempt we end the scrolling
+            if attempt == 3:
                 loop_scroll = False
-        # print('attempt',attempt)
+                logger.info(f'Scrolling completed after {attempt} attempts')
         else:
             attempt = 0
             waiting_scroll_time = round(random.uniform(2, 4), 1)
@@ -372,25 +382,24 @@ def users(users_list, save_path):
         time.sleep(2)
         # get profile description
         try:
-            description = browser.find_element_by_class_name('IdentityCredential')
+            description = browser.find_element(By.CLASS_NAME, 'IdentityCredential')
             description = description.text.replace('\n', ' ')
-        # print(description)
-        except:
+        except NoSuchElementException:
             description = ''
-        # print('no description')
+            logger.debug('No profile description found')
         quora_profile_information['description'] = description
+
         # get profile bio
         try:
-            more_button = browser.find_elements_by_link_text('(more)')
-            ActionChains(browser).move_to_element(more_button[0]).click(more_button[0]).perform()
-            time.sleep(0.5)
-            profile_bio = browser.find_element_by_class_name('ProfileDescriptionPreviewSection')
+            more_button = browser.find_elements(By.LINK_TEXT, '(more)')
+            if more_button:
+                ActionChains(browser).move_to_element(more_button[0]).click(more_button[0]).perform()
+                time.sleep(0.5)
+            profile_bio = browser.find_element(By.CLASS_NAME, 'ProfileDescriptionPreviewSection')
             profile_bio_text = profile_bio.text.replace('\n', ' ')
-            # print(profile_bio_text)
-        except Exception as e:
-            # print('no profile bio')
-            # print(e)
+        except (NoSuchElementException, Exception) as e:
             profile_bio_text = ''
+            logger.debug(f'No profile bio found: {e}')
         quora_profile_information['profile_bio'] = profile_bio_text
         html_source = browser.page_source
         source_soup = BeautifulSoup(html_source, "html.parser")
@@ -427,28 +436,25 @@ def users(users_list, save_path):
         nbquestions = 0
         nbfollowers = 0
         nbfollowing = 0
-        # print('trying to get answers stats')
+        # Get user social attributes
         try:
             html_source = browser.page_source
             source_soup = BeautifulSoup(html_source, "html.parser")
-            # Find user social attributes : #answers, #questions, #shares, #posts, #blogs, #followers, #following, #topics, #edits
-            nbanswers = browser.find_element_by_xpath("//span[text()[contains(.,'Answers')]]/parent::*")
+            # Find user social attributes: #answers, #questions, #followers, #following
+            nbanswers = browser.find_element(By.XPATH, "//span[text()[contains(.,'Answers')]]/parent::*")
             nbanswers = nbanswers.text.strip('Answers').strip().replace(',', '')
-            nbquestions = browser.find_element_by_xpath("//span[text()[contains(.,'Questions')]]/parent::*")
+            nbquestions = browser.find_element(By.XPATH, "//span[text()[contains(.,'Questions')]]/parent::*")
             nbquestions = nbquestions.text.strip('Questions').strip().replace(',', '')
-            # print("questions ",nbquestions)
-            nbfollowers = browser.find_element_by_xpath("//span[text()[contains(.,'Followers')]]/parent::*")
+            nbfollowers = browser.find_element(By.XPATH, "//span[text()[contains(.,'Followers')]]/parent::*")
             nbfollowers = nbfollowers.text.strip('Followers').strip().replace(',', '')
-            # print("followers ",nbfollowers)
-            nbfollowing = browser.find_element_by_xpath("//span[text()[contains(.,'Following')]]/parent::*")
+            nbfollowing = browser.find_element(By.XPATH, "//span[text()[contains(.,'Following')]]/parent::*")
             nbfollowing = nbfollowing.text.strip('Following').strip().replace(',', '')
-        # print("following ",nbfollowing)
+            logger.info(f'User stats - Answers: {nbanswers}, Questions: {nbquestions}, Followers: {nbfollowers}, Following: {nbfollowing}')
         except Exception as ea:
-            # print('cant get profile attributes answers questions followers following')
-            # print('Error on line {}'.format(sys.exc_info()[-1].tb_lineno), type(ea).__name__, ea)
+            logger.error(f'Cannot get profile attributes: {ea}')
             time.sleep(1)
             if nbanswers == 0:
-                print(' User does not exists or does not have answers...')
+                logger.warning('User does not exist or does not have answers')
                 continue
 
         # Open User profile file (save file)
@@ -465,22 +471,26 @@ def users(users_list, save_path):
         file_user_profile.write('\n')
 
         # scroll down profile for loading all answers
-        print('user has ', nbanswers, ' answers')
+        logger.info(f'User has {nbanswers} answers')
         if int(nbanswers) > 9:
             scroll_down(browser)
+
         # get answers text (we click on (more) button of each answer)
         if int(nbanswers) > 0:
-            # print('scrolling down for answers collect')
-            i = 0
-            # Find and click on all (more)  to load full text of answers
-            more_button = browser.find_elements_by_xpath("//div[contains(text(), '(more)')]")
-            # print('nb more buttons',len(more_button))
+            # Find and click on all (more) buttons to load full text of answers
+            more_button = browser.find_elements(By.XPATH, "//div[contains(text(), '(more)')]")
+            logger.info(f'Found {len(more_button)} "more" buttons to expand')
             for jk in range(0, len(more_button)):
-                ActionChains(browser).move_to_element(more_button[jk]).click(more_button[jk]).perform()
-                time.sleep(1)
+                try:
+                    ActionChains(browser).move_to_element(more_button[jk]).click(more_button[jk]).perform()
+                    time.sleep(1)
+                except Exception as e:
+                    logger.debug(f'Could not click "more" button {jk}: {e}')
+                    continue
+
             try:
-                questions_and_dates_tags = browser.find_elements_by_xpath(
-                    "//a[@class='q-box qu-cursor--pointer qu-hover--textDecoration--underline' and contains(@href,'/answer/') and not(contains(@href,'/comment/')) and not(contains(@style,'font-style: normal')) ]")
+                questions_and_dates_tags = browser.find_elements(By.XPATH,
+                    "//a[@class='q-box qu-cursor--pointer qu-hover--textDecoration--underline' and contains(@href,'/answer/') and not(contains(@href,'/comment/')) and not(contains(@style,'font-style: normal'))]")
                 questions_link = []
                 questions_date = []
                 # filtering only unique questions and dates
@@ -491,13 +501,13 @@ def users(users_list, save_path):
                         questions_date.append(QD.get_attribute("text"))
 
                 questions_date = [convert_date_format(d) for d in questions_date]
-                answers_text = browser.find_elements_by_xpath("//div[@class='q-relative spacing_log_answer_content']")
-                answers_text = [' '.join(answer.text.split('\n')[:]).replace('\r', '').replace('\t', '').strip() for
-                                answer in answers_text]
+                answers_text = browser.find_elements(By.XPATH, "//div[@class='q-relative spacing_log_answer_content']")
+                answers_text = [' '.join(answer.text.split('\n')[:]).replace('\r', '').replace('\t', '').strip()
+                                for answer in answers_text]
+                logger.info(f'Successfully extracted {len(answers_text)} answers')
             except Exception as eans:
-                print('cant get answers')
-                print(eans)
-                print('Error on line {}'.format(sys.exc_info()[-1].tb_lineno), type(eans).__name__, eans)
+                logger.error(f'Cannot get answers: {eans}')
+                logger.error(f'Error on line {sys.exc_info()[-1].tb_lineno}, {type(eans).__name__}')
                 continue
             # writing down answers ( date+ Question-ID + Answer text)
             for ind in range(0, int(nbanswers)):

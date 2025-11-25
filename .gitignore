@@ -127,3 +127,16 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Scraper output directories
+output*/
+*_output/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Test scripts
+test_*.py
+check_*.py
